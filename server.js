@@ -9,7 +9,6 @@ const app = express();
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 app.use(bodyParser.urlencoded({ extended: false }));
 
-// In-memory session tracking
 const sessions = {};
 
 function getSession(userId) {
@@ -35,146 +34,140 @@ app.post("/webhook", async (req, res) => {
 
   res.set("Content-Type", "text/xml");
 
-  // === ONBOARDING FLOW ===
+  // ====== ONBOARDING FLOW ======
   if (userMessage.toLowerCase() === "start onboarding") {
     session.onboardingStep = 1;
-    return res.send(`<Response><Message>👋 Welcome to Pescobar! Let's get you started.  
-What is your full name?</Message></Response>`);
+    return respond("👋 Welcome to Pescobar! Let's get you started.\nWhat is your full name?");
   }
 
   if (session.onboardingStep === 1) {
     session.name = userMessage;
     session.onboardingStep = 2;
-    return res.send(`<Response><Message>Thanks ${session.name}!  
-Your hourly wage is set at £14.50/hour.  
-Please upload your right to work documents next. 📎</Message></Response>`);
+    return respond(`Thanks ${session.name}! Your hourly wage is set at £14.50/hour.\nPlease upload your right to work documents. 📎`);
   }
 
   if (session.onboardingStep === 2) {
     session.onboardingStep = 3;
-    return res.send(`<Response><Message>📘 Here is your employee handbook: [link]  
-Reply "done" when you've read it.</Message></Response>`);
+    return respond("📘 Here’s your employee handbook: [link]\nReply 'done' once you’ve read it.");
   }
 
   if (session.onboardingStep === 3 && userMessage.toLowerCase() === "done") {
-    session.onboardingStep = 4;
-    return res.send(`<Response><Message>✅ Great. Your contract will be emailed to you shortly.  
-Your manager will now complete your handover today.</Message></Response>`);
+    session.onboardingStep = 0;
+    return respond("✅ Awesome. Your contract will be sent shortly. Your manager will now complete your handover.\nLet me know if you need anything else!");
   }
 
-  // === CLOCKING ===
+  // ====== CLOCK IN/OUT (Available Anytime) ======
   if (userMessage.toLowerCase() === "clock in") {
     session.clockInTime = now;
-    return res.send(`<Response><Message>✅ Clock-in recorded at ${now.toLocaleTimeString()}.</Message></Response>`);
+    return respond(`✅ Clock-in recorded at ${now.toLocaleTimeString()}.`);
   }
 
   if (userMessage.toLowerCase() === "clock out") {
-    if (!session.clockInTime) {
-      return res.send(`<Response><Message>You haven't clocked in yet!</Message></Response>`);
-    }
+    if (!session.clockInTime) return respond("⚠️ You haven't clocked in yet.");
 
     const workedMs = now - session.clockInTime;
     const workedHours = (workedMs / 1000 / 60 / 60).toFixed(2);
-    const totalPay = (workedHours * session.salary).toFixed(2);
+    const pay = (workedHours * session.salary).toFixed(2);
     session.clockInTime = null;
 
-    return res.send(`<Response><Message>🕓 You worked ${workedHours} hours.  
-💷 Pay = £${totalPay} at £${session.salary}/hour.  
-Good job today!</Message></Response>`);
+    return respond(`🕓 You worked ${workedHours} hours.\n💷 Estimated pay: £${pay}`);
   }
 
-  // === CLEANING CHECKLIST FLOW ===
-  if (
-    userMessage.toLowerCase().includes("clean") ||
-    userMessage.toLowerCase().includes("start cleaning")
-  ) {
+  // ====== CLEANING MODE (GPT interpreted) ======
+  if (userMessage.toLowerCase().includes("clean")) {
     session.cleaningMode = true;
-    return res.send(`<Response><Message>🧼 Cleaning started!  
-Tell me what you've done or what's left.  
-Type "done" when finished.</Message></Response>`);
+    return respond("🧼 Cleaning checklist started. Let me know what you've done — I'll track and respond. Type 'done' when finished.");
   }
 
   if (session.cleaningMode) {
     if (userMessage.toLowerCase() === "done") {
       session.cleaningMode = false;
-      return res.send(`<Response><Message>✅ Cleaning checklist closed. Great work!</Message></Response>`);
+      return respond("✅ Cleaning session completed. Great job!");
     }
 
-    const gptResponse = await openai.chat.completions.create({
-      model: "gpt-4o",
-      messages: [{ role: "user", content: `Checklist update: ${userMessage}` }],
-    });
-
-    const reply = gptResponse.choices[0].message.content;
-    return res.send(`<Response><Message>${reply}</Message></Response>`);
+    const gptReply = await askGPT(`User said: "${userMessage}". They're doing cleaning. Reply in an encouraging or helpful way.`);
+    return respond(gptReply);
   }
 
-  // === FORECAST FLOW (Open Language + GPT) ===
+  // ====== FORECAST FLOW (Natural Language) ======
   if (
     userMessage.toLowerCase().includes("make a forecast") ||
-    userMessage.toLowerCase().includes("help me with a forecast") ||
-    userMessage.toLowerCase().includes("i would like to forecast")
+    userMessage.toLowerCase().includes("can you help me with a forecast") ||
+    userMessage.toLowerCase().includes("i want to forecast")
   ) {
     session.forecastMode = true;
     session.forecastData = [];
-    return res.send(`<Response><Message>📊 Great! Let's do a 3-day forecast.  
-Please tell me how many customers you had, average spend, and sales value for **Day 1**.</Message></Response>`);
+    return respond("📊 Great! Please tell me the number of customers, average spend, and sales for Day 1.");
   }
 
   if (session.forecastMode) {
     if (session.forecastData.length < 3) {
-      // Parse message via GPT to extract data
-      const gpt = await openai.chat.completions.create({
-        model: "gpt-4o",
-        messages: [
-          {
-            role: "system",
-            content: "Extract 3 values from the message: customers, avgSpend, sales. Return as JSON.",
-          },
-          { role: "user", content: userMessage },
-        ],
-        response_format: "json",
-      });
-
       try {
-        const values = JSON.parse(gpt.choices[0].message.content);
-        session.forecastData.push(values);
-        const dayNumber = session.forecastData.length;
-
-        if (dayNumber < 3) {
-          return res.send(`<Response><Message>Got Day ${dayNumber}. Now give me Day ${dayNumber + 1} stats.</Message></Response>`);
-        }
-
-        // All 3 days collected → send summary
-        session.forecastMode = false;
-        let summary = `📈 3-Day Forecast Summary:\n`;
-
-        session.forecastData.forEach((day, i) => {
-          const projected = (day.customers * day.avgSpend).toFixed(2);
-          summary += `Day ${i + 1} — Est. Revenue: £${projected}  
-Reported Sales: £${day.sales}\n\n`;
+        const extract = await openai.chat.completions.create({
+          model: "gpt-4o",
+          messages: [
+            {
+              role: "system",
+              content:
+                "Extract customer count, average spend, and sales value from the user's message. Return as JSON with keys: customers, avgSpend, sales.",
+            },
+            { role: "user", content: userMessage },
+          ],
+          response_format: "json",
         });
 
-        return res.send(`<Response><Message>${summary}</Message></Response>`);
-      } catch (e) {
-        return res.send(`<Response><Message>❌ Sorry, I couldn't read that. Try again with customer count, avg spend, and sales value.</Message></Response>`);
+        const parsed = JSON.parse(extract.choices[0].message.content);
+        session.forecastData.push(parsed);
+
+        const day = session.forecastData.length;
+        if (day < 3) {
+          return respond(`✅ Got Day ${day}.\nNow, tell me about Day ${day + 1}.`);
+        } else {
+          session.forecastMode = false;
+          let summary = `📈 3-Day Forecast:\n`;
+          session.forecastData.forEach((day, i) => {
+            const projected = (day.customers * day.avgSpend).toFixed(2);
+            summary += `Day ${i + 1}: Projected £${projected}, Reported £${day.sales}\n`;
+          });
+          return respond(summary);
+        }
+      } catch (err) {
+        return respond("⚠️ Sorry, I couldn’t read that. Please include number of customers, avg spend, and sales value.");
       }
     }
   }
 
-  // === DEFAULT GPT REPLY ===
-  try {
-    const aiReply = await openai.chat.completions.create({
-      model: "gpt-4o",
-      messages: [{ role: "user", content: userMessage }],
-    });
+  // ====== MAINTENANCE REQUESTS ======
+  if (
+    userMessage.toLowerCase().includes("broken") ||
+    userMessage.toLowerCase().includes("not working") ||
+    userMessage.toLowerCase().includes("stopped working")
+  ) {
+    const gpt = await askGPT(`The user said: "${userMessage}". Turn this into a maintenance log reply confirming the issue is recorded and forwarded.`);
+    return respond(`🛠️ ${gpt}`);
+  }
 
-    return res.send(`<Response><Message>${aiReply.choices[0].message.content}</Message></Response>`);
-  } catch (err) {
-    console.error("GPT fallback error:", err);
-    return res.send(`<Response><Message>Sorry, I'm having trouble responding. Try again soon.</Message></Response>`);
+  // ====== DEFAULT CATCH-ALL GPT RESPONSE ======
+  const fallback = await askGPT(userMessage);
+  return respond(fallback);
+
+  // === Internal reply function ===
+  function respond(message) {
+    return res.send(`<Response><Message>${message}</Message></Response>`);
+  }
+
+  async function askGPT(prompt) {
+    try {
+      const gpt = await openai.chat.completions.create({
+        model: "gpt-4o",
+        messages: [{ role: "user", content: prompt }],
+      });
+      return gpt.choices[0].message.content;
+    } catch (err) {
+      console.error("GPT error:", err);
+      return "⚠️ I couldn’t generate a reply just now. Try again soon.";
+    }
   }
 });
 
-app.listen(3000, () => console.log("✅ Assistant is running on port 3000"));
-
+app.listen(3000, () => console.log("✅ Assistant is live on port 3000"));
