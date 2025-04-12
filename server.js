@@ -8,6 +8,7 @@ app.use(bodyParser.urlencoded({ extended: false }));
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
 app.post("/webhook", async (req, res) => {
+  console.log("✅ Webhook was hit!");
   const userMessage = req.body.Body;
   const userNumber = req.body.From;
 
