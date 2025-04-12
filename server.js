@@ -13,62 +13,57 @@ app.use(bodyParser.urlencoded({ extended: false }));
 app.post("/webhook", async (req, res) => {
   console.log("✅ Webhook was hit!");
 
-  const userMessage = req.body.Body;
-  const userNumber = req.body.From;
+  const userMessage = req.body.Body?.toLowerCase() || "";
 
-  // Predefined response: Checklist
-  if (/checklist/i.test(userMessage)) {
-    res.set("Content-Type", "text/xml");
+  // Always set TwiML headers
+  res.set("Content-Type", "text/xml");
+
+  // Respond to "checklist"
+  if (userMessage.includes("checklist")) {
     return res.send(`
       <Response>
         <Message>
-          Starting your checklist... 🔧
-1. Turn on grill
-2. Check fridge temps
-3. Restock sauces
-4. Clean surfaces
-Reply 'Done' after each step ✅
+Starting your checklist:  
+1. Turn on grill  
+2. Check fridge temp  
+3. Refill sauces  
+Reply "done" after each step ✅
         </Message>
       </Response>
     `);
   }
 
-  // Predefined response: Maintenance
-  if (/fryer|broken|repair/i.test(userMessage)) {
-    res.set("Content-Type", "text/xml");
+  // Respond to maintenance
+  if (userMessage.includes("fryer") || userMessage.includes("broken") || userMessage.includes("repair")) {
     return res.send(`
       <Response>
         <Message>
-Thanks! Logging your maintenance issue: "${userMessage}". 🛠️
-The manager will be notified.
+Thanks! Logging your maintenance issue: "${userMessage}".  
+A manager has been notified 🛠️
         </Message>
       </Response>
     `);
   }
 
-  // Default: AI-powered GPT response
+  // GPT fallback for everything else
   try {
     const aiReply = await openai.chat.completions.create({
       model: "gpt-4",
       messages: [{ role: "user", content: userMessage }],
     });
 
-    const replyText = aiReply.choices[0].message.content;
+    const replyText = aiReply.choices[0].message.content || "I'm not sure how to help with that.";
 
-    res.set("Content-Type", "text/xml");
     return res.send(`
       <Response>
         <Message>${replyText}</Message>
       </Response>
     `);
-  } catch (error) {
-    console.error("❌ GPT Error:", error);
-    res.set("Content-Type", "text/xml");
+  } catch (err) {
+    console.error("❌ GPT error:", err);
     return res.send(`
       <Response>
-        <Message>
-Sorry! I couldn't process that right now. Please try again later.
-        </Message>
+        <Message>Sorry, I'm having trouble responding right now. Please try again shortly.</Message>
       </Response>
     `);
   }
