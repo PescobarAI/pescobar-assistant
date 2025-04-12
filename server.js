@@ -16,6 +16,19 @@ app.post("/webhook", async (req, res) => {
     return res.send(`<Response><Message>Starting your checklist... \n1. Turn on grill\n2. Check fridge temp\nReply 'Done' after each step.</Message></Response>`);
   }
 
+if (/checklist/i.test(userMessage)) {
+  res.set('Content-Type', 'text/xml');
+  return res.send(`
+    <Response>
+      <Message>Starting your checklist... 
+1. Turn on grill
+2. Check fridge temp
+Reply 'Done' after each step.
+      </Message>
+    </Response>
+  `);
+}
+
   if (/fryer|broken|repair/i.test(userMessage)) {
     return res.send(`<Response><Message>Thanks! Logging your maintenance issue: "${userMessage}". A manager will be notified.</Message></Response>`);
   }
@@ -26,7 +39,13 @@ app.post("/webhook", async (req, res) => {
   });
 
   const replyText = aiReply.choices[0].message.content;
-  res.send(`<Response><Message>${replyText}</Message></Response>`);
+  res.set('Content-Type', 'text/xml');
+res.send(`
+  <Response>
+    <Message>${replyText}</Message>
+  </Response>
+`);
+
 });
 
 app.listen(3000, () => console.log("Webhook running on port 3000"));
